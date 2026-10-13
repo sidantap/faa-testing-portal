@@ -18,7 +18,7 @@ OCCUPATIONS <- c(
   FIN = "Flight Instructor",
   GSC = "Ground Security Coordinator"
 )
-COMBO <- "Drug + Alcohol"
+COMBO <- "Combo (Drug + Alcohol)"
 DRUG  <- "Drug Only"
 
 quarter_plan <- function(employees, history, completed, audit, year, quarter, drug_pct, combo_pct) {
@@ -72,5 +72,5 @@ draw_selection <- function(plan, seed) {
 
   out <- rbind(transform(combo, TestFor = rep(COMBO, nrow(combo))),
                transform(drug,  TestFor = rep(DRUG,  nrow(drug))))
-  out[order(out$Occupation, out$Name), c("EmployeeID", "Name", "Occupation", "Base", "TestFor")]
+  out[order(out$Occupation, out$Name), intersect(c("EmployeeID", "Name", "Occupation", "Base", "Position", "TestFor"), names(out))]
 }

@@ -1,122 +1,156 @@
 # Drug and Alcohol Testing Portal: a from-scratch rebuild with made-up data.
-# Runs entirely in the browser with Shinylive; changes last for the visit only.
+# Layout follows the original app: dark header with tab buttons, KPI cards with
+# annual/quarterly ribbons, and card sections. Runs in the browser with Shinylive;
+# changes last for the visit only.
 library(shiny)
-library(bslib)
 source("randomizer.R")
 
 read_data <- function(f) read.csv(file.path("data", f), stringsAsFactors = FALSE, check.names = FALSE)
-EMP_COLS <- c("EmployeeID", "Name", "Occupation", "Base", "Status", "HireDate")
-BASES <- c("CVG", "MIA", "ANC", "ORD", "LAX")
-STATUSES <- c("Active", "LOA", "Terminated")
+EMP_COLS <- c("EmployeeID", "Name", "Occupation", "Base", "Position", "Status", "HireDate")
+BASES <- c("JFK", "MIA", "CVG", "ANC")
+QUARTERS <- c("Q1 - January to March" = "Q1", "Q2 - April to June" = "Q2",
+              "Q3 - July to September" = "Q3", "Q4 - October to December" = "Q4")
 YEAR <- 2026
 now_stamp <- function() format(Sys.time(), "%Y-%m-%d %H:%M")
-occ_label <- function(code) unname(OCCUPATIONS[code])
+h <- function(x) htmltools::htmlEscape(as.character(x))
 csv_download <- function(name, data_fn) downloadHandler(
   filename = function() if (is.function(name)) name() else name,
   content = function(file) write.csv(data_fn(), file, row.names = FALSE)
 )
+field <- function(label, input) div(class = "input-group", tags$label(class = "input-label", label), input)
 
-kpi <- function(title, output_id, note = NULL) value_box(
-  title = title, value = textOutput(output_id, inline = TRUE),
-  if (!is.null(note)) p(note, class = "small mb-0"), theme = "light"
-)
+# An HTML table with optional per-column cell formatters
+html_table <- function(df, format = list()) {
+  if (!nrow(df)) return(NULL)
+  head <- tags$tr(lapply(names(df), tags$th))
+  rows <- lapply(seq_len(nrow(df)), function(i) tags$tr(lapply(names(df), function(col) {
+    v <- df[[col]][i]
+    tags$td(if (!is.null(format[[col]])) HTML(format[[col]](v, df[i, ])) else v)
+  })))
+  div(class = "table-wrap", tags$table(class = "dat", tags$thead(head), tags$tbody(rows)))
+}
+test_pill <- function(v, row) sprintf('<span class="test-pill %s">%s</span>', if (v == COMBO) "test-combo" else "test-drug", h(v))
+status_badge <- function(v, row = NULL) sprintf('<span class="status-badge status-%s">%s</span>', tolower(v), h(v))
 
-ui <- page_navbar(
+kpi_card <- function(title, value_id, icon, ribbon = NULL, badge_id = NULL, id = NULL, clickable = NULL, tone = "") {
+  div(class = paste("kpi-card", if (!is.null(clickable)) "clickable"), id = id, title = clickable,
+      if (!is.null(ribbon)) div(class = paste0("kpi-top-bar kpi-top-", tolower(ribbon)), ribbon),
+      div(class = "kpi-header", div(class = paste("kpi-icon-wrapper", tone), icon), h3(class = "kpi-title", title)),
+      p(class = "kpi-value", textOutput(value_id, inline = TRUE)),
+      if (!is.null(badge_id)) div(class = "kpi-badge", uiOutput(badge_id, inline = TRUE)))
+}
+
+ui <- fluidPage(
   title = "Drug and Alcohol Testing Portal",
-  fillable = FALSE,
-  bg = "#14213d",
-  theme = bs_theme(version = 5, primary = "#1f4e79", base_font = font_collection("system-ui", "sans-serif")),
-  window_title = "DAT Portal demo",
-  header = tagList(
-    tags$style(".shiny-html-output:has(> table) { overflow-x: auto; } .bslib-value-box .value-box-value { font-size: 1.8rem; }"),
-    div(class = "container-fluid pt-2",
-               div(class = "alert alert-secondary py-2 mb-2 small",
-                   "Demo with made-up employees. Rebuilt from scratch from an internal app I built at Atlas Air; changes reset when you reload."))),
+  tags$head(
+    tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
+    tags$link(rel = "stylesheet", href = "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"),
+    tags$link(rel = "stylesheet", href = "styles.css"),
+    tags$script(HTML("
+      Shiny.addCustomMessageHandler('nav', function(page) {
+        document.querySelectorAll('.nav-tab').forEach(function(b) { b.classList.toggle('active', b.dataset.page === page); });
+      });
+      document.addEventListener('dblclick', function(e) {
+        if (e.target.closest('#kpi_annual_drug_card, #kpi_annual_combo_card')) Shiny.setInputValue('kpi_goals', Date.now(), {priority: 'event'});
+      });
+      document.addEventListener('click', function(e) {
+        if (e.target.closest('#kpi_headcount_card')) Shiny.setInputValue('kpi_hc', Date.now(), {priority: 'event'});
+        var b = e.target.closest('[data-row-action]');
+        if (b) Shiny.setInputValue('row_action', {id: b.dataset.id, act: b.dataset.rowAction}, {priority: 'event'});
+      });
+    "))
+  ),
 
-  nav_panel("Home",
-    layout_columns(col_widths = c(8, 4),
-      h4("Key Performance Indicators", class = "mt-2"),
-      div(class = "text-end mt-2",
-          actionButton("edit_goals", "Edit annual goals", class = "btn-sm btn-outline-primary"),
-          actionButton("show_hc", "Quarterly headcount", class = "btn-sm btn-outline-primary"))
-    ),
-    layout_column_wrap(width = "160px", fill = FALSE, heights_equal = "row",
-      kpi("Total active employees", "total_employees"),
-      kpi("Annual drug goal", "drug_goal"),
-      kpi("Annual alcohol goal", "alcohol_goal"),
-      kpi("Last qtr rollover", "rollover_last_quarter"),
-      kpi("Quarterly drug goal", "quarter_drug_goal"),
-      kpi("Quarterly alcohol goal", "quarter_combo_goal"),
-      kpi("Completed this quarter", "completed_this_quarter")
-    ),
-    card(
-      card_header("Randomizer Configuration"),
-      layout_columns(col_widths = c(3, 3, 3, 3),
-        numericInput("combo_percent", "Drug + alcohol % per year", 10, min = 0, max = 100),
-        numericInput("drug_percent", "Drug % per year", 25, min = 0, max = 100),
-        selectInput("quarter", "Quarter", paste0("Q", 1:4), selected = "Q4"),
-        div(class = "pt-4", actionButton("run_randomizer", "Generate Random Selection", class = "btn-primary w-100"))
-      )
-    ),
-    card(
-      card_header("Random Selection Results"),
-      uiOutput("results_summary"),
-      tableOutput("results_table"),
-      uiOutput("results_actions")
+  div(class = "header",
+    div(class = "header-content",
+      div(class = "logo-section",
+        div(class = "logo-mark", "DAT"),
+        h1(class = "dashboard-title", "DRUG AND ALCOHOL TESTING PORTAL",
+           span(class = "dashboard-sub", "FAA random testing, demo with made-up employees"))),
+      div(class = "nav-tabs",
+        actionButton("nav_home", "Home", class = "nav-tab active", `data-page` = "home"),
+        actionButton("nav_audit", "Audit Log", class = "nav-tab", `data-page` = "audit"),
+        actionButton("nav_employees", "Employee Management", class = "nav-tab", `data-page` = "employees"))
     )
   ),
 
-  nav_panel("Audit Log",
-    card(
-      card_header("Audit Log – Randomizer Runs"),
-      layout_columns(col_widths = c(3, 3, 6),
-        dateInput("date_from", "From", value = paste0(YEAR, "-01-01")),
-        dateInput("date_to", "To", value = Sys.Date()),
-        div(class = "pt-4", downloadButton("download_audit", "Download audit log", class = "btn-outline-primary"))
-      ),
-      tableOutput("audit_table")
-    ),
-    card(card_header("Employee changes"), tableOutput("change_table"))
-  ),
+  div(class = "main-content",
+    p(class = "demo-note", "Rebuilt from scratch from an internal app I built at Atlas Air. Every employee here is made up, and changes reset when you reload."),
 
-  nav_panel("Employee Management",
-    layout_columns(col_widths = c(6, 6),
-      card(
-        card_header("Manage Employee Pool"),
-        fileInput("file_upload", "Upload an employee list (CSV)", accept = ".csv"),
-        div(downloadButton("download_template", "Template", class = "btn-sm btn-outline-secondary"),
-            downloadButton("download_master_pool", "Master pool", class = "btn-sm btn-outline-secondary")),
-        uiOutput("upload_result")
+    # ---------------- Home ----------------
+    conditionalPanel("output.current_page == 'home'", div(style = "display:grid;gap:20px",
+      div(class = "card",
+        div(class = "section-header",
+          h2(class = "section-title", "Key Performance Indicators"),
+          span(class = "hint", "Double-click an annual goal to change the rates. Click Total Active Employees for the headcount behind them.")),
+        div(class = "kpi-grid",
+          kpi_card("Total Active Employees", "total_employees", "HC", badge_id = "avg_headcount",
+                   id = "kpi_headcount_card", clickable = "Click to see quarterly headcount"),
+          kpi_card("Annual Drug Goal", "drug_goal", "D", "ANNUAL", "completed_annual_drug",
+                   id = "kpi_annual_drug_card", clickable = "Double-click to configure"),
+          kpi_card("Annual Alcohol Goal", "alcohol_goal", "D&A", "ANNUAL", "completed_annual_combo",
+                   id = "kpi_annual_combo_card", clickable = "Double-click to configure"),
+          kpi_card("Last Qtr Rollover", "rollover_last_quarter", "!", badge_id = "rollover_split", tone = "amber"),
+          kpi_card("Quarterly Drug Goal", "quarter_drug_goal", "D", "QUARTERLY", "completed_quarterly_drug", tone = "teal"),
+          kpi_card("Quarterly Alcohol Goal", "quarter_combo_goal", "D&A", "QUARTERLY", "completed_quarterly_combo", tone = "teal")
+        )
       ),
-      card(
-        card_header("Add New Employee"),
-        layout_columns(col_widths = c(6, 6),
-          textInput("employee_name", "Full name"),
-          selectInput("employee_occupation", "Occupation", setNames(names(OCCUPATIONS), OCCUPATIONS)),
-          selectInput("employee_base", "Base", BASES),
-          selectInput("employee_status", "Status", STATUSES)
+      div(class = "card",
+        h2(class = "section-title", "Randomizer Configuration"),
+        div(class = "form-grid",
+          field("Drug & Alcohol (Combo) Test %", numericInput("combo_percent", NULL, 10, min = 0, max = 100)),
+          field("Drug Test %", numericInput("drug_percent", NULL, 25, min = 0, max = 100)),
+          field("Quarter", selectInput("quarter", NULL, QUARTERS, selected = "Q4", selectize = FALSE))
         ),
-        div(actionButton("clear_form", "Clear Form", class = "btn-outline-secondary"),
-            actionButton("add_employee", "Add Employee", class = "btn-primary"))
+        div(class = "button-container", actionButton("run_randomizer", "Generate Random Selection", class = "run-button"))
+      ),
+      div(class = "card", uiOutput("results_panel"))
+    )),
+
+    # ---------------- Audit log ----------------
+    conditionalPanel("output.current_page == 'audit'", div(style = "display:grid;gap:20px",
+      div(class = "page-header", h2(class = "section-title", "Audit Log – Randomizer Runs"),
+          downloadButton("download_audit", "Download Audit Log", class = "download-button")),
+      div(class = "card", div(class = "audit-filter-row-three",
+        field("From", dateInput("date_from", NULL, value = paste0(YEAR, "-01-01"))),
+        field("To", dateInput("date_to", NULL, value = Sys.Date())),
+        field("Performed By", textInput("performed_by", NULL, placeholder = "Enter a user name")))),
+      div(class = "card", uiOutput("audit_table")),
+      div(class = "card", h2(class = "section-title", "Employee Changes"), uiOutput("change_table"))
+    )),
+
+    # ---------------- Employee management ----------------
+    conditionalPanel("output.current_page == 'employees'", div(style = "display:grid;gap:20px",
+      div(class = "page-header",
+        h2(class = "section-title", "Manage Employee Pool"),
+        div(class = "page-actions",
+          downloadLink("download_template", "Download template", class = "template-link"),
+          fileInput("file_upload", NULL, accept = ".csv", buttonLabel = "Upload CSV", placeholder = NULL),
+          downloadButton("download_master_pool", "Download Master Pool", class = "download-button"))),
+      uiOutput("upload_result"),
+      div(class = "card",
+        h2(class = "section-title", "Add New Employee"),
+        div(class = "form-grid-6",
+          field("Employee ID", textInput("employee_id", NULL, placeholder = "Auto if blank")),
+          field("Full Name", textInput("employee_name", NULL, placeholder = "First Last")),
+          field("Occupation", selectInput("employee_occupation", NULL, names(OCCUPATIONS), selectize = FALSE)),
+          field("Base", selectInput("employee_base", NULL, BASES, selectize = FALSE)),
+          field("Status", selectInput("employee_status", NULL, c("Active" = "Active", "Leave of Absence (LOA)" = "LOA"), selectize = FALSE)),
+          field("Position", textInput("position", NULL, placeholder = "e.g. First Officer"))
+        ),
+        div(class = "form-actions",
+          actionButton("clear_form", "Clear Form", class = "btn-clear"),
+          actionButton("add_employee", "Add Employee", class = "btn-atlas-primary"))
+      ),
+      div(class = "card",
+        div(class = "filter-controls",
+          field("Search", textInput("search_filter", NULL, placeholder = "ID, name, occupation, position")),
+          field("Occupations", selectInput("occupation_filter", NULL, c("All Occupations" = "all", names(OCCUPATIONS)), selectize = FALSE)),
+          field("Base", selectInput("base_filter", NULL, c("All Bases" = "all", BASES), selectize = FALSE))),
+        uiOutput("status_tabs"),
+        div(style = "margin-top:16px", uiOutput("employee_table"))
       )
-    ),
-    card(
-      card_header("Employee pool"),
-      layout_columns(col_widths = c(3, 3, 6),
-        selectInput("occupation_filter", "Occupation", c(All = "", setNames(names(OCCUPATIONS), OCCUPATIONS))),
-        selectInput("base_filter", "Base", c(All = "", BASES)),
-        radioButtons("status_filter", "Status", c("All Employees" = "", "Active", "Leave of Absence (LOA)" = "LOA", "Terminated"), inline = TRUE)
-      ),
-      layout_columns(col_widths = c(6, 6),
-        selectizeInput("pick_employee", "Select an employee to change", choices = NULL,
-                       options = list(placeholder = "Type a name or ID")),
-        div(class = "pt-4",
-            actionButton("edit_employee", "Edit", class = "btn-outline-primary"),
-            actionButton("remove_employee", "Remove", class = "btn-outline-danger"),
-            actionButton("rehire_employee", "Rehire", class = "btn-outline-success"))
-      ),
-      tableOutput("employee_table")
-    )
+    ))
   )
 )
 
@@ -126,236 +160,252 @@ server <- function(input, output, session) {
     history   = read_data("selection_history.csv"),
     completed = read_data("completed_tests.csv"),
     audit     = read_data("audit_log.csv"),
-    settings  = read_data("settings.csv"),
-    changes   = data.frame(ChangedAt = character(), EmployeeID = character(), Change = character()),
+    changes   = data.frame(ChangedAt = character(), EmployeeID = character(), Change = character(), By = character()),
     result    = NULL
   )
-  log_change <- function(id, what) db$changes <- rbind(data.frame(ChangedAt = now_stamp(), EmployeeID = id, Change = what), db$changes)
+  log_change <- function(id, what) db$changes <- rbind(data.frame(ChangedAt = now_stamp(), EmployeeID = id, Change = what, By = "you (demo)"), db$changes)
+
+  # ---- navigation ----
+  page <- reactiveVal("home")
+  output$current_page <- reactive(page())
+  outputOptions(output, "current_page", suspendWhenHidden = FALSE)
+  go <- function(p) { page(p); session$sendCustomMessage("nav", p) }
+  observeEvent(input$nav_home, go("home"))
+  observeEvent(input$nav_audit, go("audit"))
+  observeEvent(input$nav_employees, go("employees"))
+
+  # ---- goals and KPIs ----
   qnum <- reactive(as.integer(sub("Q", "", input$quarter)))
-
-  # Saved annual goals feed the configuration inputs
-  observe({
-    s <- isolate(db$settings); s <- s[s$Year == YEAR, ]
-    if (nrow(s)) {
-      updateNumericInput(session, "drug_percent", value = s$DrugPct[1])
-      updateNumericInput(session, "combo_percent", value = s$DrugAlcoholPct[1])
-    }
-  })
-
   plan <- reactive({
     req(input$drug_percent, input$combo_percent)
-    quarter_plan(db$employees, db$history, db$completed, db$audit, YEAR, qnum(),
-                 input$drug_percent, input$combo_percent)
+    quarter_plan(db$employees, db$history, db$completed, db$audit, YEAR, qnum(), input$drug_percent, input$combo_percent)
   })
+  done_count <- function(quarters, test = NULL) {
+    c <- db$completed; hs <- db$history[db$history$Year == YEAR & db$history$Quarter %in% quarters, ]
+    if (!is.null(test)) hs <- hs[hs$TestFor == test, ]
+    sum(hs$EmployeeID %in% c$EmployeeID[c$Year == YEAR & c$Quarter %in% quarters & c$TestStatus == "completed"])
+  }
+  badge <- function(n) HTML(sprintf("<b>%s</b> completed", n))
 
-  # ---- KPIs ----
   output$total_employees <- renderText(plan()$headcount_now)
+  output$avg_headcount <- renderUI(HTML(sprintf("<b>%s</b> avg headcount", ceiling(plan()$avg_headcount))))
   output$drug_goal <- renderText(plan()$annual_drug)
   output$alcohol_goal <- renderText(plan()$annual_combo)
+  output$completed_annual_drug <- renderUI(badge(done_count(1:4)))   # every test includes a drug test
+  output$completed_annual_combo <- renderUI(badge(done_count(1:4, COMBO)))
   output$rollover_last_quarter <- renderText(sum(plan()$rollover))
+  output$rollover_split <- renderUI(HTML(sprintf("<b>%s</b> drug, <b>%s</b> combo", plan()$rollover[["drug"]], plan()$rollover[["combo"]])))
   output$quarter_drug_goal <- renderText(plan()$base_drug)
   output$quarter_combo_goal <- renderText(plan()$base_combo)
-  output$completed_this_quarter <- renderText({
-    c <- db$completed; sum(c$Year == YEAR & c$Quarter == qnum() & c$TestStatus == "completed")
-  })
+  output$completed_quarterly_drug <- renderUI(badge(done_count(qnum())))
+  output$completed_quarterly_combo <- renderUI(badge(done_count(qnum(), COMBO)))
 
-  observeEvent(input$edit_goals, showModal(modalDialog(
+  observeEvent(input$kpi_goals, showModal(modalDialog(
     title = sprintf("Edit Annual Goals — %s", YEAR),
-    numericInput("modal_drug", "Drug % per year", input$drug_percent, 0, 100),
-    numericInput("modal_combo", "Drug + alcohol % per year", input$combo_percent, 0, 100),
-    footer = tagList(modalButton("Cancel"), actionButton("confirm_goals", paste("Save for", YEAR), class = "btn-primary"))
+    p("Testing rates for the year. Annual goals are the average headcount times each rate, rounded up."),
+    div(class = "form-grid",
+      field("Drug & Alcohol (Combo) Test %", numericInput("modal_combo", NULL, input$combo_percent, 0, 100)),
+      field("Drug Test %", numericInput("modal_drug", NULL, input$drug_percent, 0, 100))),
+    footer = tagList(modalButton("Cancel"), actionButton("confirm_goals", paste("Save for", YEAR), class = "btn-atlas-primary")),
+    easyClose = TRUE
   )))
   observeEvent(input$confirm_goals, {
-    db$settings <- rbind(db$settings[db$settings$Year != YEAR, ],
-                         data.frame(Year = YEAR, DrugPct = input$modal_drug, DrugAlcoholPct = input$modal_combo))
     updateNumericInput(session, "drug_percent", value = input$modal_drug)
     updateNumericInput(session, "combo_percent", value = input$modal_combo)
-    removeModal()
-    showNotification("Annual goals saved.", type = "message")
+    removeModal(); showNotification(sprintf("Annual goals saved for %s.", YEAR), type = "message")
   })
-
-  observeEvent(input$show_hc, {
+  observeEvent(input$kpi_hc, {
     p <- plan(); a <- db$audit[db$audit$Year == YEAR & db$audit$Quarter < qnum(), ]
-    hc <- rbind(data.frame(Quarter = paste0("Q", a$Quarter), Headcount = a$PoolSize, Source = "recorded at that draw"),
-                data.frame(Quarter = input$quarter, Headcount = p$headcount_now, Source = "current active pool"))
+    hc <- data.frame(Quarter = c(paste0("Q", a$Quarter), input$quarter), Headcount = c(a$PoolSize, p$headcount_now),
+                     Source = c(rep("recorded at that quarter's draw", nrow(a)), "current active pool"))
     showModal(modalDialog(
       title = sprintf("Quarterly Headcount — %s (Q1..Q%s)", YEAR, qnum()),
-      renderTable(hc),
-      p(sprintf("Average headcount: %.1f. Annual goals are this average times each testing rate, rounded up.", p$avg_headcount)),
+      html_table(hc),
+      p(style = "margin-top:12px", sprintf("Average headcount: %.1f", p$avg_headcount)),
       easyClose = TRUE, footer = modalButton("Close")
     ))
   })
 
-  # ---- Randomizer ----
+  # ---- randomizer ----
   observeEvent(input$run_randomizer, {
     p <- plan()
-    if (p$headcount_now == 0) return(showNotification("No active employees to select from.", type = "error"))
+    if (p$headcount_now == 0) return(showNotification("There are no active employees to select from.", type = "error"))
     seed <- sample.int(99999, 1)
-    db$result <- list(plan = p, seed = seed, quarter = qnum(), at = now_stamp(),
-                      selection = draw_selection(p, seed), saved = FALSE)
+    db$result <- list(plan = p, seed = seed, quarter = qnum(), at = now_stamp(), selection = draw_selection(p, seed), saved = FALSE)
   })
-
-  output$results_summary <- renderUI({
+  output$results_panel <- renderUI({
     r <- db$result
-    if (is.null(r)) return(div(class = "text-center text-muted py-4",
-      h5("Awaiting Configuration"), p("Set the rates and quarter, then generate a random selection.")))
-    s <- r$selection; p <- r$plan
-    div(class = "d-flex flex-wrap gap-2 mb-2",
-      span(class = "badge text-bg-primary", sum(s$TestFor == COMBO), " drug + alcohol"),
-      span(class = "badge text-bg-secondary", sum(s$TestFor == DRUG), " drug only"),
-      span(class = "badge text-bg-light", "pool ", p$headcount_now),
-      span(class = "badge text-bg-light", "rollover ", p$rollover[["combo"]], " d+a / ", p$rollover[["drug"]], " drug"),
-      span(class = "badge text-bg-light", "cap ", p$cap),
-      span(class = "badge text-bg-light", "seed ", r$seed))
+    if (is.null(r)) return(div(class = "placeholder-content",
+      div(class = "placeholder-icon", HTML('<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v3H9zM8.5 11h7M8.5 15h5"/></svg>')),
+      h3(class = "placeholder-title", "Awaiting Configuration"),
+      p(class = "placeholder-text", "Configure and run the randomizer to generate employee selection results.")))
+    s <- r$selection
+    tagList(
+      h2(class = "section-title", "Random Selection Results"),
+      p(class = "run-meta", sprintf("%s Q%s, pool of %s, rollover %s drug and %s combo, cap %s, seed %s, run %s",
+        YEAR, r$quarter, r$plan$headcount_now, r$plan$rollover[["drug"]], r$plan$rollover[["combo"]], r$plan$cap, r$seed, r$at)),
+      div(class = "summary-grid",
+        div(class = "summary-card", span(class = "summary-value", sum(s$TestFor == DRUG)), span(class = "summary-label", "Drug Only Tests")),
+        div(class = "summary-card", span(class = "summary-value", sum(s$TestFor == COMBO)), span(class = "summary-label", "Combo Tests")),
+        div(class = "summary-card total", span(class = "summary-value", nrow(s)), span(class = "summary-label", "Total Selected"))),
+      html_table(setNames(s, c("Employee ID", "Name", "Occupation", "Base", "Position", "Test For")), list(`Test For` = test_pill)),
+      div(class = "results-actions",
+        downloadButton("download_results", "Download Results", class = "download-button"),
+        actionButton("save_results", if (r$saved) "Saved" else "Save Results", class = "action-button save",
+                     disabled = if (r$saved) "disabled" else NULL),
+        actionButton("clear_results", "Clear Results", class = "action-button clear"))
+    )
   })
-  output$results_table <- renderTable({
-    req(db$result); s <- db$result$selection
-    transform(s, Occupation = occ_label(s$Occupation))
-  })
-  output$results_actions <- renderUI({
-    req(db$result)
-    div(class = "d-flex gap-2",
-        downloadButton("download_results", "Download Results", class = "btn-outline-primary"),
-        actionButton("save_results", if (db$result$saved) "Saved" else "Save Results", class = "btn-success",
-                     disabled = if (db$result$saved) "disabled" else NULL),
-        actionButton("clear_results", "Clear Results", class = "btn-outline-secondary"))
-  })
-  output$download_results <- csv_download(
-    function() paste0("selection_", YEAR, "_Q", db$result$quarter, ".csv"),
-    function() db$result$selection
-  )
+  output$download_results <- csv_download(function() paste0("selection_", YEAR, "_Q", db$result$quarter, ".csv"), function() db$result$selection)
   observeEvent(input$save_results, {
     r <- db$result; req(r, !r$saved)
-    db$history <- rbind(db$history, data.frame(EmployeeID = r$selection$EmployeeID, Year = YEAR, Quarter = r$quarter,
-                                               TestFor = r$selection$TestFor, SelectedAt = r$at))
+    db$history <- rbind(db$history, data.frame(EmployeeID = r$selection$EmployeeID, Year = YEAR, Quarter = r$quarter, TestFor = r$selection$TestFor, SelectedAt = r$at))
     db$audit <- rbind(db$audit, data.frame(RunAt = r$at, Year = YEAR, Quarter = r$quarter, PoolSize = r$plan$headcount_now,
-                                           DrugAlcohol = sum(r$selection$TestFor == COMBO), DrugOnly = sum(r$selection$TestFor == DRUG),
-                                           Seed = r$seed, User = "you (demo)"))
+      DrugAlcohol = sum(r$selection$TestFor == COMBO), DrugOnly = sum(r$selection$TestFor == DRUG), Seed = r$seed, User = "you (demo)"))
     db$result$saved <- TRUE
-    showNotification("Saved to selection history and the audit log.", type = "message")
+    showNotification("Saved to the selection history and audit log.", type = "message")
   })
   observeEvent(input$clear_results, db$result <- NULL)
 
-  # ---- Audit log ----
+  # ---- audit log ----
   audit_view <- reactive({
     a <- db$audit; d <- as.Date(substr(a$RunAt, 1, 10))
-    a <- a[d >= input$date_from & d <= input$date_to, ]
-    a[order(a$RunAt, decreasing = TRUE), ]
+    keep <- d >= input$date_from & d <= input$date_to
+    if (nzchar(input$performed_by)) keep <- keep & grepl(input$performed_by, a$User, ignore.case = TRUE, fixed = TRUE)
+    a <- a[keep, ]; a[order(a$RunAt, decreasing = TRUE), ]
   })
-  output$audit_table <- renderTable(audit_view())
+  output$audit_table <- renderUI({
+    a <- audit_view()
+    if (!nrow(a)) return(p(class = "hint", "No randomizer runs match these filters."))
+    a$Period <- paste0(a$Year, " Q", a$Quarter)
+    html_table(setNames(a[, c("RunAt", "Period", "PoolSize", "DrugAlcohol", "DrugOnly", "Seed", "User")],
+                        c("Run At", "Period", "Pool Size", "Combo", "Drug Only", "Seed", "Performed By")))
+  })
   output$download_audit <- csv_download("audit_log.csv", audit_view)
-  output$change_table <- renderTable({
-    if (nrow(db$changes)) db$changes else data.frame(Note = "No employee changes yet in this session.")
+  output$change_table <- renderUI({
+    if (!nrow(db$changes)) return(p(class = "hint", "No employee changes yet in this session. Add, edit or remove someone in Employee Management."))
+    html_table(setNames(db$changes, c("Changed At", "Employee ID", "Change", "By")))
   })
 
-  # ---- Employee management ----
-  emp_view <- reactive({
+  # ---- employee management ----
+  status_filter <- reactiveVal("all")
+  PAGE_SIZE <- 10
+  emp_page <- reactiveVal(1)
+  observeEvent(list(input$search_filter, input$occupation_filter, input$base_filter, status_filter()), emp_page(1))
+  observeEvent(input$emp_prev, emp_page(max(1, emp_page() - 1)))
+  observeEvent(input$emp_next, emp_page(emp_page() + 1))
+  filtered <- reactive({
     e <- db$employees
-    if (nzchar(input$occupation_filter)) e <- e[e$Occupation == input$occupation_filter, ]
-    if (nzchar(input$base_filter)) e <- e[e$Base == input$base_filter, ]
-    if (nzchar(input$status_filter)) e <- e[e$Status == input$status_filter, ]
+    if (input$occupation_filter != "all") e <- e[e$Occupation == input$occupation_filter, ]
+    if (input$base_filter != "all") e <- e[e$Base == input$base_filter, ]
+    q <- trimws(input$search_filter)
+    if (nzchar(q)) e <- e[grepl(q, paste(e$EmployeeID, e$Name, e$Occupation, e$Position), ignore.case = TRUE, fixed = TRUE), ]
     e
   })
-  output$employee_table <- renderTable({
-    e <- emp_view(); transform(e, Occupation = occ_label(e$Occupation))
+  output$status_tabs <- renderUI({
+    e <- filtered()
+    counts <- c(all = nrow(e), Active = sum(e$Status == "Active"), LOA = sum(e$Status == "LOA"), Terminated = sum(e$Status == "Terminated"))
+    labels <- c(all = "All Employees", Active = "Active", LOA = "Leave of Absence (LOA)", Terminated = "Terminated")
+    div(class = "status-tabs", lapply(names(labels), function(s)
+      actionButton(paste0("status_", tolower(s)), tagList(labels[[s]], span(class = "count", counts[[s]])),
+                   class = paste("status-tab", if (status_filter() == s) "active"))))
   })
-  observe({
-    e <- db$employees
-    updateSelectizeInput(session, "pick_employee", choices = setNames(e$EmployeeID, paste(e$EmployeeID, e$Name, "·", e$Status)),
-                         selected = isolate(input$pick_employee), server = FALSE)
+  observeEvent(input$status_all, status_filter("all"))
+  observeEvent(input$status_active, status_filter("Active"))
+  observeEvent(input$status_loa, status_filter("LOA"))
+  observeEvent(input$status_terminated, status_filter("Terminated"))
+  output$employee_table <- renderUI({
+    e <- filtered(); if (status_filter() != "all") e <- e[e$Status == status_filter(), ]
+    if (!nrow(e)) return(p(class = "hint", "No employees match these filters."))
+    pages <- ceiling(nrow(e) / PAGE_SIZE); pg <- min(emp_page(), pages)
+    shown <- e[((pg - 1) * PAGE_SIZE + 1):min(pg * PAGE_SIZE, nrow(e)), ]
+    total <- nrow(e); e <- shown
+    e$Actions <- e$EmployeeID
+    tagList(
+      html_table(setNames(e[, c("EmployeeID", "Name", "Occupation", "Base", "Position", "Status", "Actions")],
+                          c("Employee ID", "Name", "Occupation", "Base", "Position", "Status", "Actions")),
+        list(Status = status_badge, Actions = function(id, row) {
+          paste0(sprintf('<button type="button" class="row-btn" data-row-action="edit" data-id="%s">Edit</button>', id),
+                 if (row$Status == "Terminated") sprintf('<button type="button" class="row-btn ok" data-row-action="rehire" data-id="%s">Rehire</button>', id)
+                 else sprintf('<button type="button" class="row-btn danger" data-row-action="remove" data-id="%s">Remove</button>', id))
+        })),
+      div(class = "pager",
+        span(class = "table-foot", sprintf("Showing %s to %s of %s employees", (pg - 1) * PAGE_SIZE + 1, (pg - 1) * PAGE_SIZE + nrow(e), total)),
+        div(actionButton("emp_prev", "Previous", disabled = if (pg <= 1) "disabled" else NULL),
+            span(class = "table-foot", sprintf(" Page %s of %s ", pg, pages)),
+            actionButton("emp_next", "Next", disabled = if (pg >= pages) "disabled" else NULL))))
   })
-  picked <- reactive({ req(input$pick_employee); db$employees[db$employees$EmployeeID == input$pick_employee, ] })
 
   observeEvent(input$clear_form, {
-    updateTextInput(session, "employee_name", value = "")
+    for (id in c("employee_id", "employee_name", "position")) updateTextInput(session, id, value = "")
     updateSelectInput(session, "employee_status", selected = "Active")
   })
   observeEvent(input$add_employee, {
     name <- trimws(input$employee_name)
-    if (!nzchar(name)) return(showNotification("Enter a name first.", type = "warning"))
-    ids <- as.integer(sub("E", "", db$employees$EmployeeID))
-    id <- paste0("E", max(ids) + 1)
+    if (!nzchar(name)) return(showNotification("Enter the employee's full name.", type = "warning"))
+    id <- trimws(input$employee_id)
+    if (!nzchar(id)) id <- paste0("E", max(as.integer(sub("\\D+", "", db$employees$EmployeeID)), na.rm = TRUE) + 1)
+    if (id %in% db$employees$EmployeeID) return(showNotification(paste("Employee ID", id, "is already in the pool."), type = "warning"))
     db$employees <- rbind(data.frame(EmployeeID = id, Name = name, Occupation = input$employee_occupation, Base = input$employee_base,
-                                     Status = input$employee_status, HireDate = as.character(Sys.Date())), db$employees)
-    log_change(id, paste("added as", input$employee_status, occ_label(input$employee_occupation), "at", input$employee_base))
-    updateTextInput(session, "employee_name", value = "")
-    showNotification(paste("Added", name, "as", id), type = "message")
+      Position = trimws(input$position), Status = input$employee_status, HireDate = as.character(Sys.Date())), db$employees)
+    log_change(id, sprintf("added as %s %s at %s", input$employee_status, input$employee_occupation, input$employee_base))
+    for (f in c("employee_id", "employee_name", "position")) updateTextInput(session, f, value = "")
+    showNotification(sprintf("Added %s (%s).", name, id), type = "message")
   })
 
-  observeEvent(input$edit_employee, {
-    e <- picked()
-    showModal(modalDialog(
-      title = paste("Edit", e$Name, "·", e$EmployeeID),
-      selectInput("edit_occupation", "Occupation", setNames(names(OCCUPATIONS), OCCUPATIONS), e$Occupation, selectize = FALSE),
-      selectInput("edit_base", "Base", BASES, e$Base, selectize = FALSE),
-      selectInput("edit_status", "Status", STATUSES, e$Status, selectize = FALSE),
-      footer = tagList(modalButton("Cancel"), actionButton("confirm_edit", "Save Changes", class = "btn-primary"))
-    ))
+  person <- function(id) db$employees[db$employees$EmployeeID == id, ]
+  person_card <- function(e) div(class = "confirm-person", HTML(status_badge(e$Status)),
+    div(tags$b(e$Name), span(class = "hint", sprintf("%s, %s, %s, %s", e$EmployeeID, unname(OCCUPATIONS[e$Occupation]), e$Base, e$Position))))
+  target <- reactiveVal(NULL)
+  observeEvent(input$row_action, {
+    a <- input$row_action; e <- person(a$id); req(nrow(e) == 1); target(a$id)
+    if (a$act == "edit") showModal(modalDialog(title = paste("Edit Employee —", e$Name),
+      div(class = "form-grid",
+        field("Occupation", selectInput("edit_occupation", NULL, names(OCCUPATIONS), e$Occupation, selectize = FALSE)),
+        field("Base", selectInput("edit_base", NULL, BASES, e$Base, selectize = FALSE)),
+        field("Position", textInput("edit_position", NULL, e$Position)),
+        field("Status", selectInput("edit_status", NULL, c("Active", "LOA", "Terminated"), e$Status, selectize = FALSE))),
+      footer = tagList(modalButton("Cancel"), actionButton("confirm_edit", "Save Changes", class = "btn-atlas-primary")), easyClose = TRUE))
+    if (a$act == "remove") showModal(modalDialog(title = "Confirm Removal",
+      div(class = "confirm-body", p("This employee leaves the testing pool. Their record and history stay on file."), person_card(e)),
+      footer = tagList(modalButton("Cancel"), actionButton("confirm_remove", "Remove Employee", class = "btn btn-danger"))))
+    if (a$act == "rehire") showModal(modalDialog(title = "Confirm Rehire",
+      div(class = "confirm-body", p("This employee rejoins the testing pool as Active."), person_card(e)),
+      footer = tagList(modalButton("Cancel"), actionButton("confirm_rehire", "Rehire Employee", class = "btn btn-success"))))
   })
-  observeEvent(input$confirm_edit, {
-    e <- picked(); i <- db$employees$EmployeeID == e$EmployeeID
-    diffs <- c(if (e$Occupation != input$edit_occupation) paste("occupation", e$Occupation, "to", input$edit_occupation),
-               if (e$Base != input$edit_base) paste("base", e$Base, "to", input$edit_base),
-               if (e$Status != input$edit_status) paste("status", e$Status, "to", input$edit_status))
-    db$employees$Occupation[i] <- input$edit_occupation
-    db$employees$Base[i] <- input$edit_base
-    db$employees$Status[i] <- input$edit_status
-    if (length(diffs)) log_change(e$EmployeeID, paste(diffs, collapse = "; "))
-    removeModal()
-  })
-  observeEvent(input$remove_employee, {
-    e <- picked()
-    if (e$Status == "Terminated") return(showNotification("Already terminated.", type = "warning"))
-    showModal(modalDialog(title = "Confirm Removal",
-      p(sprintf("Mark %s (%s) as terminated? They leave the testing pool but stay on record.", e$Name, e$EmployeeID)),
-      footer = tagList(modalButton("Cancel"), actionButton("confirm_remove", "Remove Employee", class = "btn-danger"))))
-  })
-  observeEvent(input$confirm_remove, {
-    e <- picked(); db$employees$Status[db$employees$EmployeeID == e$EmployeeID] <- "Terminated"
-    log_change(e$EmployeeID, paste("status", e$Status, "to Terminated")); removeModal()
-  })
-  observeEvent(input$rehire_employee, {
-    e <- picked()
-    if (e$Status != "Terminated") return(showNotification("Only terminated employees can be rehired.", type = "warning"))
-    showModal(modalDialog(title = "Confirm Rehire",
-      p(sprintf("Rehire %s (%s) as active? They rejoin the testing pool.", e$Name, e$EmployeeID)),
-      footer = tagList(modalButton("Cancel"), actionButton("confirm_rehire", "Rehire Employee", class = "btn-success"))))
-  })
-  observeEvent(input$confirm_rehire, {
-    e <- picked(); db$employees$Status[db$employees$EmployeeID == e$EmployeeID] <- "Active"
-    log_change(e$EmployeeID, "status Terminated to Active (rehired)"); removeModal()
-  })
+  set_fields <- function(id, values, note) {
+    i <- db$employees$EmployeeID == id; old <- db$employees[i, ]
+    diffs <- unlist(lapply(names(values), function(k) if (!identical(as.character(old[[k]]), as.character(values[[k]])))
+      sprintf("%s %s to %s", tolower(k), old[[k]], values[[k]])))
+    for (k in names(values)) db$employees[i, k] <- values[[k]]
+    if (length(diffs)) log_change(id, paste0(paste(diffs, collapse = "; "), note))
+  }
+  observeEvent(input$confirm_edit, { set_fields(target(), list(Occupation = input$edit_occupation, Base = input$edit_base,
+    Position = input$edit_position, Status = input$edit_status), ""); removeModal() })
+  observeEvent(input$confirm_remove, { set_fields(target(), list(Status = "Terminated"), " (removed)"); removeModal() })
+  observeEvent(input$confirm_rehire, { set_fields(target(), list(Status = "Active"), " (rehired)"); removeModal() })
 
-  output$download_template <- csv_download("employee_upload_template.csv",
-    function() data.frame(EmployeeID = "E2001", Name = "Jordan Lee", Occupation = "FCR", Base = "CVG", Status = "Active", HireDate = "2026-01-15"))
+  output$download_template <- csv_download("employee_upload_template.csv", function()
+    data.frame(EmployeeID = "E2001", Name = "Jordan Lee", Occupation = "FCR", Base = "CVG", Position = "First Officer", Status = "Active", HireDate = "2026-01-15"))
   output$download_master_pool <- csv_download("master_employee_pool.csv", function() db$employees)
 
   output$upload_result <- renderUI(NULL)
   observeEvent(input$file_upload, {
     up <- tryCatch(read.csv(input$file_upload$datapath, stringsAsFactors = FALSE), error = function(e) NULL)
-    problems <- c(
-      if (is.null(up)) "The file could not be read as CSV.",
-      if (!is.null(up) && !all(EMP_COLS %in% names(up))) paste("Missing columns:", paste(setdiff(EMP_COLS, names(up)), collapse = ", ")),
-      if (!is.null(up) && all(EMP_COLS %in% names(up)) && any(!up$Occupation %in% names(OCCUPATIONS))) "Occupation must be one of ACD, ACM, FCR, FIN, GSC.",
-      if (!is.null(up) && all(EMP_COLS %in% names(up)) && any(!up$Status %in% STATUSES)) "Status must be Active, LOA or Terminated."
-    )
+    problems <- if (is.null(up)) "The file could not be read as CSV." else c(
+      if (!all(EMP_COLS %in% names(up))) paste("Missing columns:", paste(setdiff(EMP_COLS, names(up)), collapse = ", ")),
+      if (all(EMP_COLS %in% names(up)) && any(!up$Occupation %in% names(OCCUPATIONS))) "Occupation must be ACD, ACM, FCR, FIN or GSC.",
+      if (all(EMP_COLS %in% names(up)) && any(!up$Status %in% c("Active", "LOA", "Terminated"))) "Status must be Active, LOA or Terminated.")
     if (length(problems)) {
-      output$upload_result <- renderUI(div(class = "alert alert-danger mt-2 mb-0", tags$ul(lapply(problems, tags$li))))
+      output$upload_result <- renderUI(div(class = "card", style = "border-color:var(--red)",
+        tags$b("Upload not applied."), lapply(problems, div), div(class = "hint", "Download the template to see the expected columns.")))
       return()
     }
-    up <- up[, EMP_COLS]
-    existing <- up$EmployeeID %in% db$employees$EmployeeID
-    for (k in which(existing)) {
-      i <- db$employees$EmployeeID == up$EmployeeID[k]
-      if (db$employees$Status[i] != up$Status[k]) log_change(up$EmployeeID[k], paste("status", db$employees$Status[i], "to", up$Status[k], "(upload)"))
-      db$employees[i, EMP_COLS] <- up[k, EMP_COLS]
-    }
-    if (any(!existing)) {
-      db$employees <- rbind(up[!existing, ], db$employees)
-      for (id in up$EmployeeID[!existing]) log_change(id, "added (upload)")
-    }
-    output$upload_result <- renderUI(div(class = "alert alert-success mt-2 mb-0",
-      sprintf("%d rows processed: %d updated, %d added.", nrow(up), sum(existing), sum(!existing))))
+    up <- up[, EMP_COLS]; existing <- up$EmployeeID %in% db$employees$EmployeeID
+    for (k in which(existing)) set_fields(up$EmployeeID[k], as.list(up[k, setdiff(EMP_COLS, "EmployeeID")]), " (upload)")
+    if (any(!existing)) { db$employees <- rbind(up[!existing, ], db$employees); for (id in up$EmployeeID[!existing]) log_change(id, "added (upload)") }
+    output$upload_result <- renderUI(div(class = "card", style = "border-color:var(--green)",
+      sprintf("Upload applied: %d rows, %d updated, %d added. Changes are listed in the Audit Log.", nrow(up), sum(existing), sum(!existing))))
   })
 }
 
