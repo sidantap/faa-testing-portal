@@ -23,11 +23,15 @@ kpi <- function(title, output_id, note = NULL) value_box(
 
 ui <- page_navbar(
   title = "Drug and Alcohol Testing Portal",
-  theme = bs_theme(version = 5, primary = "#1f4e79", "navbar-bg" = "#14213d", base_font = font_collection("system-ui", "sans-serif")),
+  fillable = FALSE,
+  bg = "#14213d",
+  theme = bs_theme(version = 5, primary = "#1f4e79", base_font = font_collection("system-ui", "sans-serif")),
   window_title = "DAT Portal demo",
-  header = div(class = "container-fluid pt-2",
+  header = tagList(
+    tags$style(".shiny-html-output:has(> table) { overflow-x: auto; } .bslib-value-box .value-box-value { font-size: 1.8rem; }"),
+    div(class = "container-fluid pt-2",
                div(class = "alert alert-secondary py-2 mb-2 small",
-                   "Demo with made-up employees. Rebuilt from scratch from an internal app I built at Atlas Air; changes reset when you reload.")),
+                   "Demo with made-up employees. Rebuilt from scratch from an internal app I built at Atlas Air; changes reset when you reload."))),
 
   nav_panel("Home",
     layout_columns(col_widths = c(8, 4),
@@ -36,7 +40,7 @@ ui <- page_navbar(
           actionButton("edit_goals", "Edit annual goals", class = "btn-sm btn-outline-primary"),
           actionButton("show_hc", "Quarterly headcount", class = "btn-sm btn-outline-primary"))
     ),
-    layout_column_wrap(width = "200px", fill = FALSE,
+    layout_column_wrap(width = "160px", fill = FALSE, heights_equal = "row",
       kpi("Total active employees", "total_employees"),
       kpi("Annual drug goal", "drug_goal"),
       kpi("Annual alcohol goal", "alcohol_goal"),
@@ -282,17 +286,17 @@ server <- function(input, output, session) {
     e <- picked()
     showModal(modalDialog(
       title = paste("Edit", e$Name, "·", e$EmployeeID),
-      selectInput("edit_occupation", "Occupation", setNames(names(OCCUPATIONS), OCCUPATIONS), e$Occupation),
-      selectInput("edit_base", "Base", BASES, e$Base),
-      selectInput("edit_status", "Status", STATUSES, e$Status),
+      selectInput("edit_occupation", "Occupation", setNames(names(OCCUPATIONS), OCCUPATIONS), e$Occupation, selectize = FALSE),
+      selectInput("edit_base", "Base", BASES, e$Base, selectize = FALSE),
+      selectInput("edit_status", "Status", STATUSES, e$Status, selectize = FALSE),
       footer = tagList(modalButton("Cancel"), actionButton("confirm_edit", "Save Changes", class = "btn-primary"))
     ))
   })
   observeEvent(input$confirm_edit, {
     e <- picked(); i <- db$employees$EmployeeID == e$EmployeeID
-    diffs <- c(if (e$Occupation != input$edit_occupation) paste("occupation", e$Occupation, "→", input$edit_occupation),
-               if (e$Base != input$edit_base) paste("base", e$Base, "→", input$edit_base),
-               if (e$Status != input$edit_status) paste("status", e$Status, "→", input$edit_status))
+    diffs <- c(if (e$Occupation != input$edit_occupation) paste("occupation", e$Occupation, "to", input$edit_occupation),
+               if (e$Base != input$edit_base) paste("base", e$Base, "to", input$edit_base),
+               if (e$Status != input$edit_status) paste("status", e$Status, "to", input$edit_status))
     db$employees$Occupation[i] <- input$edit_occupation
     db$employees$Base[i] <- input$edit_base
     db$employees$Status[i] <- input$edit_status
@@ -308,7 +312,7 @@ server <- function(input, output, session) {
   })
   observeEvent(input$confirm_remove, {
     e <- picked(); db$employees$Status[db$employees$EmployeeID == e$EmployeeID] <- "Terminated"
-    log_change(e$EmployeeID, paste("status", e$Status, "→ Terminated")); removeModal()
+    log_change(e$EmployeeID, paste("status", e$Status, "to Terminated")); removeModal()
   })
   observeEvent(input$rehire_employee, {
     e <- picked()
@@ -319,7 +323,7 @@ server <- function(input, output, session) {
   })
   observeEvent(input$confirm_rehire, {
     e <- picked(); db$employees$Status[db$employees$EmployeeID == e$EmployeeID] <- "Active"
-    log_change(e$EmployeeID, "status Terminated → Active (rehired)"); removeModal()
+    log_change(e$EmployeeID, "status Terminated to Active (rehired)"); removeModal()
   })
 
   output$download_template <- csv_download("employee_upload_template.csv",
@@ -343,7 +347,7 @@ server <- function(input, output, session) {
     existing <- up$EmployeeID %in% db$employees$EmployeeID
     for (k in which(existing)) {
       i <- db$employees$EmployeeID == up$EmployeeID[k]
-      if (db$employees$Status[i] != up$Status[k]) log_change(up$EmployeeID[k], paste("status", db$employees$Status[i], "→", up$Status[k], "(upload)"))
+      if (db$employees$Status[i] != up$Status[k]) log_change(up$EmployeeID[k], paste("status", db$employees$Status[i], "to", up$Status[k], "(upload)"))
       db$employees[i, EMP_COLS] <- up[k, EMP_COLS]
     }
     if (any(!existing)) {
